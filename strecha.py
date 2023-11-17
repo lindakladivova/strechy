@@ -1,26 +1,17 @@
 
 import os
-import sys
-import argparse
 import subprocess
 from qgis import processing
-from osgeo import gdal
-from qgis.core import QgsApplication, QgsProject, QgsVectorLayer, QgsRasterLayer, QgsCoordinateReferenceSystem
+from qgis.core import QgsProject, QgsVectorLayer, QgsRasterLayer, QgsCoordinateReferenceSystem
 
-# Parsovaní argumentů předaných z bash/cmd skriptu
-#parser = argparse.ArgumentParser(description='QGIS Processing Script with Parameters')
-#parser.add_argument('--DEM_PATH', type=str, help='Vstupní DEM v TIFu', required=True)
-#parser.add_argument('--DXF_PATH', type=str, help='Vstupní obvod v DXF formátu', required=True)
-#parser.add_argument('--OUTPUT_DIR', type=str, help='Výstupni adresář, kde budou uloženy výsledky i mezivýsledky. Pokud neexistuje, vytvoří se.', required=True)
+######################## VSTUPY (je treba zmenit) ###############################
+dxf_file_path = "/home/linduska/strecha/strecha1/obvod.dxf"
+ortofoto_path = "/home/linduska/strecha/strecha1/ortofoto.tif"
+raster_file_path = "/home/linduska/strecha/strecha1/dem.tif"
+tir_file_path = "/home/linduska/strecha/strecha1/tir.tif"
+output_dir = "/home/linduska/strecha/strecha1/output"
 
-# Zpracování argumentů
-#args = parser.parse_args()
-#dxf_file_path = args.DXF_PATH
-#raster_file_path = args.DEM_PATH
-#output_dir = args.OUTPUT_DIR
-dxf_file_path = "/home/linduska/strecha/strecha3/obvod.dxf"
-raster_file_path = "/home/linduska/strecha/strecha3/dem.tif"
-output_dir = "/home/linduska/strecha/strecha3/output"
+#################################################################################
 
 # Vytvoření výstupního adresáře
 if not os.path.exists(output_dir):
@@ -167,13 +158,27 @@ def run_rank_filter(input_raster_path, output_raster_path, radius=2, rank=50, ke
     except Exception as e:
         print(f"Neočekávaná chyba: {str(e)}")
 
+def run_resampling_filter(input_raster_path, output_raster_path_lopass, output_raster_path_hipass, scale=10):
+    try:
+        # Spuštění funkce Resampling Filter
+        processing.run("sagang:resamplingfilter", {
+            'GRID': input_raster_path,
+            'SCALE': scale,
+            'LOPASS': output_raster_path_lopass,
+            'HIPASS': output_raster_path_hipass
+        })
+        print(f"Resampling Filter byl úspěšně aplikován na rastr a výsledek byl uložen do souborů: {output_raster_path_lopass} a {output_raster_path_hipass}")
+
+    except Exception as e:
+        print(f"Neočekávaná chyba: {str(e)}")       
+
 def convert_SAGA_type_to_GeoTIFF(input_raster_path, output_raster_path, output_name):
     try:
         # Spuštění konverze
         processing.run("gdal:translate", {
             'INPUT': input_raster_path,
             'OPTIONS': 'COMPRESS=DEFLATE',
-            'DATA_TYPE': 6,  # Data type 5 odpovídá Float32
+            'DATA_TYPE': 6,  # Data type 6 odpovídá UInt16
             'OUTPUT': output_raster_path
         })
         print(f"Rastr byl úspečně zkonvertován na GeoTIFF v cestě: {output_raster_path}")
@@ -225,28 +230,66 @@ def rescale_raster_to_0_255(input_raster_path, output_raster_path, output_name):
     except Exception as e:
         print(f"Neočekávaná chyba: {str(e)}")
 
+def select_bands(input_raster_path, output_raster_path, output_name, additional_params):
+    try:
+        # Spuštění funkce "Translate"
+        processing.run("gdal:translate", {
+            'INPUT': input_raster_path,
+            'EXTRA': additional_params,
+            'OUTPUT': output_raster_path
+        })
+        print(f"Rastrový soubor byl úspěšně uložen pouze s vybranými bandy do souboru: {output_raster_path}")
+        display_raster_layer(output_raster_path, output_name)
+    except Exception as e:
+        print(f"Neočekávaná chyba: {str(e)}")
+
+def merge_rasters(input_rasters, output_raster_path, output_name):
+    try:
+        # Spuštění funkce "Merge"
+        processing.run("gdal:merge", {
+            'INPUT': input_rasters,
+            'SEPARATE' : True,
+            'DATA_TYPE': 0,  # 0 odpovídá 8bit
+            'OUTPUT': output_raster_path
+        })
+        print(f"Rastrový soubor byl úspěšně uložen do souboru: {output_raster_path}")
+        display_raster_layer(output_raster_path, output_name)
+    except Exception as e:
+        print(f"Neočekávaná chyba: {str(e)}")
+
+
 #######  Cesty k výstupním souborům ####### 
+rgb_path = os.path.join(output_dir, 'ortofoto_rgb.tif')
+
 mask_path = os.path.join(output_dir, 'obvod.shp')
 clipped_dem_path = os.path.join(output_dir, 'clipped_dem.tif') # DEM clipped 
 stats_path = os.path.join(output_dir, 'stats.gpkg') # Statistika s medianem
 normalized_dem_path = os.path.join(output_dir, 'normalized_dem.tif')  # normalized clipped DEM 
-filtered_dem_path = os.path.join(output_dir, 'filtered_dem.sdat')  # filtered DEM v puvodnim formatu SAGY
-filtered_dem_gt_path = os.path.join(output_dir, 'filtered_dem.tif') # filtered DEM (GeoTIFF)
-slope_path = os.path.join(output_dir, 'slope.tif') # Slope
-slope_8bit_path = os.path.join(output_dir, 'slope_8bit.tif') # Slope (8 bit)
-rescaled_dem_path = os.path.join(output_dir, 'rescaled_dem.tif') # DEM rescaled
+
+filtered_dem_path_rank = os.path.join(output_dir, 'filtered_dem_rank.sdat')  # filtered DEM v puvodnim formatu SAGY pro RANK filter
+filtered_dem_gt_path_rank = os.path.join(output_dir, 'filtered_dem_rank.tif') # filtered DEM (GeoTIFF) pro RANK filter
+
+rescaled_dem_path = os.path.join(output_dir, 'rescaled_dem.tif') # DEM rescaled (vypocteny z filterovaneho DEMu)
 dem_8bit_path = os.path.join(output_dir, 'dem_8bit.tif') # DEM (8 bit)
 
-## Inicializace QGIS aplikace
-#qgs = QgsApplication([], False)
-#qgs.initQgis()
-#
-#qgs.setPrefixPath("/usr/bin/qgis", True)
-#sys.path.append('/usr/bin/python3') 
+filtered_dem_path_hipass = os.path.join(output_dir, 'filtered_dem_hipass.sdat')  # filtered DEM v puvodnim formatu SAGY pro RESAMPLING filter
+filtered_dem_gt_path_hipass = os.path.join(output_dir, 'filtered_dem_hipass.tif') # filtered DEM (GeoTIFF) pro RESAMPLING filter
+filtered_dem_path_lopass = os.path.join(output_dir, 'filtered_dem_lopass.sdat')  # filtered DEM v puvodnim formatu SAGY (musi byt vystupem RESAMPLING filteru ale nebude dale pouzito)
+
+slope_path = os.path.join(output_dir, 'slope.tif') # Slope vypocteny z filterovaneho DEMu
+slope_8bit_path = os.path.join(output_dir, 'slope_8bit.tif') # Slope (8 bit)
+
+tir_r_path = os.path.join(output_dir, 'tir_r.tif') # Red kanal z TIRu
+
+result_path = os.path.join(output_dir, 'result.tif') # Vysledny rastrovy soubor slozeny z 6 bandu => R G B slope DEM tir
 
 # Odstraneni vrstev z projektu
-#remove_all_layers_from_project()
+remove_all_layers_from_project()
 
+############################################## 1. Příprava RGB #######################################################
+select_bands(ortofoto_path, rgb_path, "ortofoto_RGB", '-b 1 -b 2 -b 3')
+
+############################################## 2. Příprava DEMu ######################################################
 # Konverze DXF na SHAPEFILE
 # Příkaz pro spuštění ogr2ogr
 convert_dxf_to_shapefile(dxf_file_path, mask_path)
@@ -254,8 +297,14 @@ convert_dxf_to_shapefile(dxf_file_path, mask_path)
 # Zobrazeni vrstvy obvodu v QGISu
 display_vector_layer(mask_path, "Obvod")
 
+# Zobrazeni vrstvy ortofota v QGISu
+display_raster_layer(raster_file_path, "ortofoto")
+
 # Zobrazeni vrstvy DEM v QGISu
 display_raster_layer(raster_file_path, "DEM")
+
+# Zobrazeni vrstvy TIR v QGISu
+display_raster_layer(raster_file_path, "TIR")
 
 # Nastavení souřadnicového systému (CRS) pro vrstvu
 crs = QgsCoordinateReferenceSystem("EPSG:5514") 
@@ -270,20 +319,37 @@ median_value = calculate_median_zonal_statistics(clipped_dem_path, mask_path, st
 expression = f'Clipped_DEM@1" - {median_value}'
 run_raster_calculator(expression, clipped_dem_path, normalized_dem_path, "Normalized_DEM")
 
-# Filtrace DEMu
-run_rank_filter(normalized_dem_path, filtered_dem_path)
+# Filtrace DEMu pomocí RANK filteru (hodí se lépe pro samotný DEM)
+run_rank_filter(normalized_dem_path, filtered_dem_path_rank, radius=2)
 
-# Převod SAGA formátu rastru na GeoTIFF, aby mohl být zobrazen v QGISu
-convert_SAGA_type_to_GeoTIFF(filtered_dem_path, filtered_dem_gt_path, "Filtered_DEM")
+# Převod filtrovaných DEMů v SAGA formátu na GeoTIFF, aby mohly být zobrazeny v QGISu
+convert_SAGA_type_to_GeoTIFF(filtered_dem_path_rank, filtered_dem_gt_path_rank, "Filtered_DEM_rank")
+
+# Rescalování filtrovaného DEM na hodnoty do 0 do 255
+rescale_raster_to_0_255(filtered_dem_gt_path_rank, rescaled_dem_path, "Rescaled_DEM")
+
+# Konverze DEMu na 8bit
+convert_raster_to_8bit(rescaled_dem_path, dem_8bit_path, "Rescaled_DEM_8bit")
+
+############################################## 3. Příprava SLOPE ######################################################
+
+# Filtrace DEMu na základě RESAMPLING filtru pro účely SLOPE
+run_resampling_filter(normalized_dem_path, filtered_dem_path_lopass, filtered_dem_path_hipass, scale=1)
+
+# Převod filtrovaných DEMů v SAGA formátu na GeoTIFF, aby mohly být zobrazeny v QGISu
+# Pro slope mne zajímá pouze HIPASS vysledek resampling filteru 
+convert_SAGA_type_to_GeoTIFF(filtered_dem_path_hipass, filtered_dem_gt_path_hipass, "Filtered_DEM_hipass")
 
 # Výpočet slope analýzy
-run_slope_analysis(filtered_dem_gt_path, slope_path, "Slope")
+run_slope_analysis(filtered_dem_gt_path_hipass, slope_path, "Slope")
 
 # Konverze slope na 8bit
 convert_raster_to_8bit(slope_path, slope_8bit_path, "Slope_8bit")
 
-# Rescalování filtrovaného DEM na hodnoty do 0 do 255
-rescale_raster_to_0_255(filtered_dem_gt_path, rescaled_dem_path, "Rescaled_DEM")
+############################################## 4. Příprava TIR ########################################################
+select_bands(tir_file_path, tir_r_path, "TIR_R_band", '-b 1')
 
-# Konverze DEMu na 8bit
-convert_raster_to_8bit(rescaled_dem_path, dem_8bit_path, "Rescaled_DEM_8bit")
+######################################## 5. Spojení všech 6 bandů #####################################################
+input_rasters = [rgb_path,  slope_8bit_path, dem_8bit_path, tir_r_path]
+merge_rasters(input_rasters, result_path, "RESULT")
+
